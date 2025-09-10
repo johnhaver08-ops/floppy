@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Flappy Advanced+ with Video Popup</title>
+  <style>
+    :root{--bg:#70c5ce;--ground:#ded895;--pipe:#2ecc71;--dark:#023047;--accent:#ffb703}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Arial,sans-serif;background:var(--bg);display:flex;align-items:center;justify-content:center}
+    #wrap{width:360px;max-width:100%}
+    canvas{display:block;width:100%;height:auto;background:linear-gradient(#70c5ce,#7adbe8)}
+    .overlay{text-align:center;padding:10px;color:var(--dark)}
+    button{padding:8px 14px;margin:4px;border-radius:8px;border:none;background:var(--accent);color:var(--dark);cursor:pointer;font-weight:600}
+    select{padding:6px;margin:4px;border-radius:6px;border:1px solid #ccc}
+    .small{font-size:13px;color:var(--dark)}
+
+    /* Fullscreen popup */
+    #videoPopup{
+      display:none;
+      position:fixed;
+      top:0;left:0;width:100%;height:100%;
+      background:rgba(0,0,0,0.95);
+      display:flex;align-items:center;justify-content:center;
+      flex-direction:column;
+      z-index:999;
+    }
+    #videoPopup video{max-width:90%;max-height:80%;border-radius:10px;}
+    #closePopup{
+      margin-top:10px;
+      padding:6px 12px;
+      border:none;border-radius:6px;
+      background:#ff5555;color:#fff;
+      font-weight:bold;cursor:pointer;
+    }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="c" width="480" height="640"></canvas>
+    <div class="overlay">
+      <div id="message" class="small">Tap / Space to flap. Press P to pause.</div>
+      <div style="margin-top:8px">
+        <button id="restart">Restart</button>
+        <button id="sound">🔊 Sound</button>
+        <select id="difficulty">
+          <option value="easy">Easy</option>
+          <option value="normal" selected>Normal</option>
+          <option value="hard">Hard</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fullscreen Video Popup -->
+  <div id="videoPopup">
+    <video id="loseVideo" controls autoplay>
+      <source src="relapse.mp4" type="video/mp4">
+      Your browser does not support the video tag.
+    </video>
+    <button id="closePopup">❌ Close</button>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    const restartBtn = document.getElementById('restart');
+    const soundBtn = document.getElementById('sound');
+    const msg = document.getElementById('message');
+    const diffSelect = document.getElementById('difficulty');
+
+    const popup = document.getElementById('videoPopup');
+    const loseVideo = document.getElementById('loseVideo');
+    const closePopup = document.getElementById('closePopup');
+
+    const W = canvas.width, H = canvas.height;
+
+    const sounds = {
+      flap: new Audio('https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg'),
+      score: new Audio('https://actions.google.com/sounds/v1/cartoon/slide_whistle_to_drum.ogg'),
+      crash: new Audio('https://actions.google.com/sounds/v1/cartoon/clang_and_wobble.ogg')
+    };
+    let soundOn = true;
+    function play(name){ if(soundOn) { sounds[name].currentTime=0; sounds[name].play(); } }
+
+    let bird, pipes, frame, score, best, running, alive, difficulty, speed, gapSize;
+    function newGame(){
+      bird = { x: 100, y: H/2, r: 14, vy: 0, rot: 0 };
+      pipes = [];
+      frame = 0;
+      score = 0;
+      running = false;
+      alive = true;
+      difficulty = diffSelect.value;
+      if(difficulty==='easy'){ speed=2.5; gapSize=160; }
+      if(difficulty==='normal'){ speed=3; gapSize=130; }
+      if(difficulty==='hard'){ speed=3.8; gapSize=110; }
+      try{ best = parseInt(localStorage.getItem('flappy-best')) || 0; }catch(e){ best = 0; }
+      msg.textContent = 'Tap / Space to start flying!';
+      popup.style.display = 'none';
+      loseVideo.pause();
+      loseVideo.currentTime = 0;
+    }
+
+    function spawnPipe(){
+      const min = 60, max = H - 120 - gapSize;
+      const top = Math.floor(min + Math.random()*(max-min));
+      pipes.push({ x: W+40, top: top, gap: gapSize, w: 64, passed: false });
+    }
+
+    function update(){
+      if(!running || !alive) return;
+      frame++;
+      bird.vy += 0.7;
+      bird.y += bird.vy;
+      bird.rot = Math.max(-0.6, Math.min(1.0, bird.vy*0.05));
+
+      const groundY = H-80;
+      if(bird.y + bird.r > groundY){ bird.y = groundY - bird.r; die(); }
+      if(bird.y - bird.r < 0){ bird.y = bird.r; bird.vy = 0; }
+
+      if(frame % 95 === 0) spawnPipe();
+
+      for(let i = pipes.length-1; i>=0; i--){
+        const p = pipes[i]; p.x -= speed;
+        if(!p.passed && p.x + p.w < bird.x){
+          p.passed = true; score++; play('score');
+          if(score>best){ best=score; try{localStorage.setItem('flappy-best',best);}catch(e){} }
+        }
+        if(p.x + p.w < -40) pipes.splice(i,1);
+        if(collidePipe(bird,p)) die();
+      }
+    }
+
+    function collidePipe(b,p){
+      function circRect(cx,cy,r,rx,ry,rw,rh){
+        const nx = Math.max(rx, Math.min(cx, rx+rw));
+        const ny = Math.max(ry, Math.min(cy, ry+rh));
+        const dx = cx-nx, dy = cy-ny; return (dx*dx+dy*dy)<r*r;
+      }
+      if(circRect(b.x,b.y,b.r, p.x,0,p.w,p.top)) return true;
+      if(circRect(b.x,b.y,b.r, p.x,p.top+p.gap,p.w,H-(p.top+p.gap)-80)) return true;
+      return false;
+    }
+
+    function die(){
+      if(alive){
+        alive=false; running=false; play('crash');
+        msg.textContent = `Game Over — Score ${score}, Best ${best}`;
+        popup.style.display = 'flex';
+        loseVideo.play();
+      }
+    }
+
+    function draw(){
+      const cycle = Math.sin(frame/400)*0.5+0.5;
+      const g = ctx.createLinearGradient(0,0,0,H);
+      g.addColorStop(0, `rgba(${Math.floor(112*cycle)},${197},${206},1)`);
+      g.addColorStop(1, `rgba(${Math.floor(122*cycle)},${219},${232},1)`);
+      ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+      for(const p of pipes){
+        ctx.fillStyle='#2ecc71';
+        ctx.fillRect(p.x,0,p.w,p.top);
+        ctx.fillRect(p.x,p.top+p.gap,p.w,H-(p.top+p.gap)-80);
+        ctx.fillStyle='#249a52';
+        ctx.fillRect(p.x-6,p.top-6,p.w+12,6);
+        ctx.fillRect(p.x-6,p.top+p.gap+(H-(p.top+p.gap)-80),p.w+12,6);
+      }
+
+      ctx.fillStyle='#ded895'; ctx.fillRect(0,H-80,W,80);
+
+      ctx.save(); ctx.translate(bird.x,bird.y); ctx.rotate(bird.rot);
+      ctx.fillStyle='#ffdd57'; ctx.beginPath(); ctx.arc(0,0,bird.r,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#f4b400'; ctx.fillRect(-6,-4,12,8);
+      ctx.restore();
+
+      ctx.fillStyle='#023047'; ctx.font='28px Arial'; ctx.fillText(score,20,40);
+      ctx.font='14px Arial'; ctx.fillText('Best: '+best,20,60);
+      ctx.font='14px Arial'; ctx.fillText('Mode: '+difficulty,20,80);
+    }
+
+    function loop(){ update(); draw(); requestAnimationFrame(loop); }
+
+    function flap(){ if(!alive) return; bird.vy=-9; running=true; play('flap'); }
+
+    window.addEventListener('keydown',(e)=>{
+      if(e.code==='Space'){flap(); e.preventDefault();}
+      if(e.code==='KeyR'){newGame();}
+      if(e.code==='KeyP'){running=!running;}
+    });
+    canvas.addEventListener('pointerdown',()=>{ if(alive) flap(); });
+    restartBtn.addEventListener('click',()=>{newGame();});
+    soundBtn.addEventListener('click',()=>{soundOn=!soundOn; soundBtn.textContent = soundOn ? '🔊 Sound' : '🔇 Mute';});
+
+    diffSelect.addEventListener('change',()=>{ newGame(); });
+    closePopup.addEventListener('click',()=>{ popup.style.display='none'; loseVideo.pause(); loseVideo.currentTime=0; });
+
+    newGame(); loop();
+  </script>
+</body>
+</html>
